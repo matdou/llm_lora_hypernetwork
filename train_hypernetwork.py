@@ -1,14 +1,3 @@
-"""
-FLEXIBLE DATA LOADER: Auto-discover all LoRA files and configure train/val split
-
-Features:
--Automatically finds all available fact_XXXX directories
--Configurable train/val split
--Configurable number of examples to use
--Handles missing files gracefully
--Reports data statistics
-"""
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -23,7 +12,6 @@ from glob import glob
 
 MODEL_NAME = "Qwen/Qwen2-7B-Instruct"
 
-# ==================== CONFIGURATION ====================
 NUM_EXAMPLES = 5000
 TRAIN_SPLIT = 0.8         # 80% train
 RANDOM_SEED = 42
@@ -36,44 +24,34 @@ POSSIBLE_LORA_PATHS = [
 ]
 
 DATA_PATH = "/home/hice1/mdoutre3/LLM_project_beta/wikifactdiff_converted.csv"
-# =======================================================
 
 def find_lora_directory():
-    """Find the LoRA directory from multiple possible paths"""
     for path_str in POSSIBLE_LORA_PATHS:
         path = Path(path_str).expanduser()
         if path.exists():
-            print(f"✓ Found LoRA directory: {path}")
+            print(f"Found LoRA directory: {path}")
             return path
-    
-    # If not found in predefined paths, search
+
     print("Searching for LoRA directory...")
     home = Path.home()
     for pattern in ["**/qwen25_individual_loras", "**/individual_loras"]:
         matches = list(home.glob(pattern))
         if matches:
-            print(f"✓ Found LoRA directory: {matches[0]}")
+            print(f"Found LoRA directory: {matches[0]}")
             return matches[0]
     
     raise FileNotFoundError("Could not find LoRA directory. Please update POSSIBLE_LORA_PATHS")
 
 def discover_all_loras(lora_dir):
-    """
-    Discover all available fact_XXXX directories
-    Returns: List of (index, path) tuples sorted by index
-    """
     print(f"\nScanning {lora_dir} for LoRA files...")
-    
-    # Find all fact_* directories
+
     fact_dirs = sorted(lora_dir.glob("fact_*"))
     
     if not fact_dirs:
         raise FileNotFoundError(f"No fact_* directories found in {lora_dir}")
-    
-    # Extract indices and verify lora_params.pt exists
+
     available_loras = []
     for fact_dir in fact_dirs:
-        # Extract index from directory name (e.g., "fact_0000" -> 0)
         try:
             idx = int(fact_dir.name.split('_')[1])
             lora_file = fact_dir / "lora_params.pt"
@@ -81,26 +59,18 @@ def discover_all_loras(lora_dir):
                 available_loras.append((idx, fact_dir))
         except (ValueError, IndexError):
             print(f"Warning: Skipping invalid directory name: {fact_dir.name}")
-    
+
+
     available_loras.sort(key=lambda x: x[0])
-    
-    print(f"✓ Found {len(available_loras)} valid LoRA files")
+
+    print(f"Found {len(available_loras)} valid LoRA files")
     print(f"  Index range: {available_loras[0][0]} to {available_loras[-1][0]}")
     
     return available_loras
 
 def load_data_flexible(lora_dir, df, num_examples, tokenizer, embedding_layer, device):
-    """
-    Load data with flexible number of examples
-    
-    Args:
-        num_examples: int or 'all' - number of examples to load
-    """
-    
-    # Discover all available LoRAs
     available_loras = discover_all_loras(lora_dir)
-    
-    # Determine how many to use
+
     if num_examples == 'all':
         num_to_load = len(available_loras)
     else:
@@ -125,8 +95,7 @@ def load_data_flexible(lora_dir, df, num_examples, tokenizer, embedding_layer, d
                 'std': target_flat.std().item(),
                 'abs_mean': target_flat.abs().mean().item(),
             })
-            
-            # Get corresponding row from CSV file
+
             if fact_idx < len(df):
                 row = df.iloc[fact_idx]
             else:
@@ -159,30 +128,24 @@ def load_data_flexible(lora_dir, df, num_examples, tokenizer, embedding_layer, d
     
     avg_std = sum(s['std'] for s in lora_stats) / len(lora_stats)
     avg_abs_mean = sum(s['abs_mean'] for s in lora_stats) / len(lora_stats)
-    
-    print(f"\n✓ Successfully loaded {len(all_data)} examples")
+
+    print(f"\nSuccessfully loaded {len(all_data)} examples")
     print(f"  Target LoRA stats: std={avg_std:.6f}, abs_mean={avg_abs_mean:.6f}")
     
     return all_data, avg_std, avg_abs_mean
 
-
-print("FLEXIBLE HYPERNETWORK TRAINING")
 
 print(f"Configuration:")
 print(f"  Total examples: {NUM_EXAMPLES}")
 print(f"  Train split: {int(NUM_EXAMPLES * TRAIN_SPLIT if NUM_EXAMPLES != 'all' else 'TBD')}")
 print(f"  Val split: {int(NUM_EXAMPLES * (1-TRAIN_SPLIT) if NUM_EXAMPLES != 'all' else 'TBD')}")
 print(f"  Random seed: {RANDOM_SEED}")
- 
 
-# Set random seeds
 random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 
-# Find LoRA directory
 LORA_DIR = find_lora_directory()
 
-# Load model
 print("\nLoading model...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 if tokenizer.pad_token is None:
@@ -196,17 +159,14 @@ model = AutoModelForCausalLM.from_pretrained(
 embedding_layer = model.get_input_embeddings()
 device = model.device
 
-# Load CSV
 print(f"\nLoading CSV from {DATA_PATH}...")
 df = pd.read_csv(DATA_PATH)
-print(f"✓ CSV has {len(df)} rows")
+print(f"CSV has {len(df)} rows")
 
-# Load data
 all_data, avg_std, avg_abs_mean = load_data_flexible(
     LORA_DIR, df, NUM_EXAMPLES, tokenizer, embedding_layer, device
 )
 
-# Split into train-validation
 random.shuffle(all_data)
 split_idx = int(len(all_data) * TRAIN_SPLIT)
 train_data = all_data[:split_idx]
@@ -217,15 +177,7 @@ print(f"  Train: {len(train_data)} examples")
 print(f"  Val: {len(val_data)} examples")
 
 
-
 def evaluate_base_model(base_model, tokenizer, data, max_examples=None):
-    """
-    Evaluate how well the base model alone answers the factual questions.
-    Uses the same correctness heuristic:
-      - Extract words >3 characters from true answer
-      - Check if any appears in the generated output
-    """
-    
     eval_data = data[:max_examples] if max_examples else data
     results = []
     
@@ -245,7 +197,6 @@ def evaluate_base_model(base_model, tokenizer, data, max_examples=None):
         predicted_answer = text.lower()
         true_answer = d['answer'].lower()
 
-        # same correctness heuristic as our LoRA test
         answer_words = [w for w in true_answer.split() if len(w) > 3]
         correct = any(word in predicted_answer for word in answer_words)
 
@@ -261,8 +212,6 @@ base_acc_val = evaluate_base_model(model, tokenizer, val_data, max_examples=50)
 print(f"Base model accuracy on TRAIN: {base_acc_train*100:.1f}%")
 print(f"Base model accuracy on VAL:   {base_acc_val*100:.1f}%")
 
-
-# Hypernetwork
 class ImprovedHypernetwork(nn.Module):
     def __init__(self, input_dim, output_dim, target_std=0.4):
         super().__init__()
@@ -320,7 +269,6 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     verbose=True
 )
 
-# Get LoRA shapes
 fact_dir = LORA_DIR / "fact_0000"
 lora_params = torch.load(fact_dir / "lora_params.pt", map_location="cpu", weights_only=True)
 lora_shapes = {name: param.shape for name, param in lora_params.items()}
@@ -409,10 +357,6 @@ def evaluate_set(hypernetwork, data, base_model, tokenizer, lora_shapes, device,
     
     return change_rate, accuracy, gib_rate
 
-
-
-# Training loop
- 
 best_val_acc = 0
 patience_counter = 0
 max_patience = 40
@@ -459,14 +403,14 @@ for epoch in range(150):
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             patience_counter = 0
-            print(f"💾 Best val acc: {val_acc*100:.0f}%")
+            print(f"Best val acc: {val_acc*100:.0f}%")
             torch.save({'epoch': epoch, 'model_state_dict': hypernetwork.state_dict(),
                        'val_acc': val_acc}, 'best_hypernetwork.pt')
         else:
             patience_counter += 1
-        
+
         if val_acc >= 0.5 and val_gib == 0:
-            print(f"\n🎉 SUCCESS! Val acc={val_acc*100:.0f}%")
+            print(f"\nSUCCESS! Val acc={val_acc*100:.0f}%")
             break
         
         if patience_counter >= max_patience:
@@ -474,4 +418,3 @@ for epoch in range(150):
             break
 
 print(f"Best validation accuracy: {best_val_acc*100:.0f}%")
- 

@@ -15,7 +15,6 @@ from contextlib import contextmanager
 #os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 #os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -33,12 +32,10 @@ def suppress_output():
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-# Configuration
-MODEL_NAME = "Qwen/Qwen2-7B-Instruct"  # Use 2.0, not 2.5
+MODEL_NAME = "Qwen/Qwen2-7B-Instruct"
 BASE_OUTPUT_DIR = "/home/hice1/mdoutre3/scratch/qwen25_individual_loras"
 DATA_PATH = "/home/hice1/mdoutre3/LLM_project_beta/wikifactdiff_converted.csv"
 
-# carefully chosen
 LORA_CONFIG = {
     "r": 2,                     
     "lora_alpha": 4,            # Alpha: 2*r
@@ -82,13 +79,11 @@ def create_lora_model(base_model):
 
 
 def format_training_text(row, tokenizer):
-    """Format single fact for training - train on NEW facts (not old)"""
     prompt = f"As of today, {row['question'].lower()}\nAnswer: {row['new_answer']}"
     return prompt
 
 
 def train_single_lora(fact_idx, fact_row, base_model, tokenizer, output_dir, pbar=None):
-    """Train LoRA adapter for a single fact using manual training loop"""
     import torch.optim as optim
     import torch.nn as nn
     
@@ -102,17 +97,15 @@ def train_single_lora(fact_idx, fact_row, base_model, tokenizer, output_dir, pba
     
     if pbar:
         pbar.set_description(f"Fact {fact_idx}: {fact_row['question'][:50]}...")
-    
+
     model = create_lora_model(base_model)
     model.train()
-    
-    # Check initial LoRA weights
+
     for name, param in model.named_parameters():
         if "lora" in name and param.requires_grad:
             if torch.isnan(param).any() or torch.isinf(param).any():
                 raise ValueError(f"NaN/Inf in initial {name}")
-    
-    # Setup optimizer, only LoRA parameters
+
     lora_params = [p for n, p in model.named_parameters() if "lora" in n and p.requires_grad]
     optimizer = optim.AdamW(lora_params, lr=TRAINING_CONFIG["learning_rate"], 
                            weight_decay=0.01, eps=1e-8)
@@ -123,62 +116,53 @@ def train_single_lora(fact_idx, fact_row, base_model, tokenizer, output_dir, pba
         
         outputs = model(**inputs, labels=inputs["input_ids"])
         loss = outputs.loss
-        
-        # Check for NaN/Inf
+
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"\n Fact {fact_idx} step {step}: Invalid loss = {loss.item()}")
-            # Check logits
             with torch.no_grad():
                 test_outputs = model(**inputs)
                 logits = test_outputs.logits
                 print(f"  Logits: min={logits.min().item()}, max={logits.max().item()}, " +
                       f"has_nan={torch.isnan(logits).any()}, has_inf={torch.isinf(logits).any()}")
             raise ValueError(f"Invalid loss at step {step}")
-        
+
         loss.backward()
-        
-        # Check gradients
+
         max_grad = 0.0
         for p in lora_params:
             if p.grad is not None:
                 max_grad = max(max_grad, p.grad.abs().max().item())
                 if torch.isnan(p.grad).any():
                     raise ValueError(f"NaN in gradient at step {step}")
-        
-        # Clip gradients
+
         torch.nn.utils.clip_grad_norm_(lora_params, TRAINING_CONFIG["gradient_clip"])
         
         optimizer.step()
-    
+
     model.eval()
-    
-    # Verify NaNs in final weights
+
     for name, param in model.named_parameters():
         if "lora" in name and (torch.isnan(param).any() or torch.isinf(param).any()):
             raise ValueError(f"NaN/Inf in final {name}")
-    
-    # Extract LoRA parameters (only save tensors, not full PEFT model)
+
     lora_params_dict = {}
     for name, param in model.named_parameters():
         if "lora" in name and param.requires_grad:
-            # Save in bfloat16 to reduce size (4 bytes -> 2 bytes)
             lora_params_dict[name] = param.detach().cpu().to(torch.bfloat16)
-    
-    # Compress and save
-    torch.save(lora_params_dict, fact_dir / "lora_params.pt", 
-               _use_new_zipfile_serialization=True)  # Better compression ++
+
+    torch.save(lora_params_dict, fact_dir / "lora_params.pt",
+               _use_new_zipfile_serialization=True)
     
     metadata = {
         "fact_idx": fact_idx,
         "question": fact_row['question'],
-        "answer": fact_row.get('new_answer', ''),  # Only save what we trained on
+        "answer": fact_row.get('new_answer', ''),
         "num_params": sum(p.numel() for p in lora_params_dict.values()),
     }
-    
+
     with open(fact_dir / "metadata.json", "w") as f:
-        json.dump(metadata, f, separators=(',', ':'))  # Compact JSON
-    
-    # Clean up
+        json.dump(metadata, f, separators=(',', ':'))
+
     del model, optimizer
     torch.cuda.empty_cache()
     
@@ -196,8 +180,7 @@ def main():
     #parser.add_argument("--single_file", action="store_true",
     #                    help="Save all LoRAs in single compressed file (saves space)")
     args = parser.parse_args()
-    
-    # Load data
+
     print("Loading dataset...")
     df = pd.read_csv(DATA_PATH)
     
@@ -223,15 +206,13 @@ def main():
     else:
         df_slice = df
         print(f"Training on ALL {len(df)} facts")
-    
-    # Filter out already trained
+
     total_to_train = len(df_slice)
     remaining = sum(1 for idx in df_slice.index if idx not in existing_facts)
     print(f"Remaining to train: {remaining}/{total_to_train} (skipping {total_to_train - remaining} already done)")
-    
+
     df = df_slice
-    
-    # Load base model
+
     base_model, tokenizer = load_base_model()
     
     global_config = {
@@ -245,18 +226,16 @@ def main():
     
     with open(output_dir / "config.json", "w") as f:
         json.dump(global_config, f, indent=2)
-    
-    # Train LoRA for each fact with progress bar
+
     all_metadata = []
     failed_facts = []
     skipped_count = 0
     
     print(f"\nTraining individual LoRA adapters...")
     print(f"Output: {output_dir}\n")
-    
+
     with tqdm(total=len(df), desc="Training LoRAs", unit="fact") as pbar:
         for idx, row in df.iterrows():
-            # Check if already trained
             if idx in existing_facts:
                 skipped_count += 1
                 pbar.set_postfix({"skipped": skipped_count, "failed": len(failed_facts)})
@@ -295,7 +274,7 @@ def main():
     print(f"Successfully trained: {len(all_metadata)} new LoRAs")
     print(f"Skipped: {skipped_count} (already trained)")
     if failed_facts:
-        print(f"✗ Failed: {len(failed_facts)} facts (see failed_facts.csv)")
+        print(f"Failed: {len(failed_facts)} facts (see failed_facts.csv)")
     print(f"Total LoRAs in directory: {len(existing_facts) + len(all_metadata)}")
     print(f"Output directory: {output_dir}")
 
