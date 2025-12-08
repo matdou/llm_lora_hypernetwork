@@ -15,7 +15,6 @@ base_model = AutoModelForCausalLM.from_pretrained(
 
 df = pd.read_csv("/home/hice1/mdoutre3/LLM_project_beta/wikifactdiff_converted.csv")
 
-# first 1000 examples
 num_test = min(1000, len(df))
 print(f"Testing first {num_test} examples...")
 
@@ -35,8 +34,7 @@ for idx in tqdm(range(num_test), desc="Testing base model"):
     
     text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     answer = text.split("Answer:")[-1].strip().split("\n")[0].split(".")[0].strip()
-    
-    # Check what the model says
+
     answer_lower = answer.lower()
     old_lower = old.lower()
     new_lower = new.lower()
@@ -58,13 +56,10 @@ for idx in tqdm(range(num_test), desc="Testing base model"):
         "has_neither": has_neither,
     })
 
-# Create results dataframe
 results_df = pd.DataFrame(results)
 
-# Save results
 results_df.to_csv("/home/hice1/mdoutre3/scratch/base_model_knowledge_check.csv", index=False)
 
-# Calculate statistics
 print("BASE MODEL KNOWLEDGE ANALYSIS")
 print(f"Total tested: {len(results_df)}")
 print()
@@ -80,7 +75,6 @@ print(f"Model says BOTH:           {both_count:4d} / {num_test} ({100*both_count
 print(f"Model says NEITHER:        {neither_count:4d} / {num_test} ({100*neither_count/num_test:.1f}%)")
 print()
 
-# Exclusive categories
 only_old = results_df[results_df["has_old"] & ~results_df["has_new"]].shape[0]
 only_new = results_df[results_df["has_new"] & ~results_df["has_old"]].shape[0]
 
@@ -97,7 +91,6 @@ print(f"Results saved to: /home/hice1/mdoutre3/scratch/base_model_knowledge_chec
 
 print("EXAMPLE CASES")
 
-# Show 3 examples where model says NEW
 new_examples = results_df[results_df["has_new"] & ~results_df["has_old"]].head(3)
 if len(new_examples) > 0:
     print("\n--- Examples where model says NEW answer ---")
@@ -106,7 +99,6 @@ if len(new_examples) > 0:
         print(f"   Old: {row['old_answer']} | New: {row['new_answer']}")
         print(f"   Model: {row['model_answer']}")
 
-# Show 3 examples where model says OLD
 old_examples = results_df[results_df["has_old"] & ~results_df["has_new"]].head(3)
 if len(old_examples) > 0:
     print("\n--- Examples where model says OLD answer ---")
@@ -115,7 +107,6 @@ if len(old_examples) > 0:
         print(f"   Old: {row['old_answer']} | New: {row['new_answer']}")
         print(f"   Model: {row['model_answer']}")
 
-# Show 3 examples where model says NEITHER
 neither_examples = results_df[results_df["has_neither"]].head(3)
 if len(neither_examples) > 0:
     print("\n--- Examples where model says NEITHER ---")
